@@ -1,0 +1,34 @@
+{
+  "name": "sflix-supabase-catalog",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Ingestion pipeline for SFlix catalog enrichment into Supabase with TMDb metadata and OpenSubtitles Indonesian subtitle tracks.",
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "api:start": "tsx src/app-api/server.ts",
+    "ingest:search": "tsx src/cli/search-and-ingest.ts",
+    "ingest:subtitles": "tsx src/cli/backfill-subtitles.ts",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate:deploy": "prisma migrate deploy"
+  },
+  "dependencies": {
+    "@prisma/adapter-pg": "^7.7.0",
+    "@prisma/client": "^7.7.0",
+    "@supabase/supabase-js": "^2.103.2",
+    "dotenv": "17.4.2",
+    "pg": "^8.20.0",
+    "pino": "10.3.1",
+    "zod": "4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "25.6.0",
+    "prisma": "^7.7.0",
+    "tsx": "4.21.0",
+    "typescript": "6.0.2"
+  }
+}
