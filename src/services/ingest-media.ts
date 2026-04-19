@@ -371,6 +371,10 @@ export class MediaIngestService {
     item: TmdbMovieFeedItem
   ) {
     for (const result of results) {
+      if (normalizeMediaType(result.type) !== "movie") {
+        continue;
+      }
+
       try {
         const mediaInfo = await this.sflix.getMediaInfo(result.id);
         const mediaType = normalizeMediaType(mediaInfo.type);
