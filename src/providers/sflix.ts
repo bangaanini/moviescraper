@@ -27,10 +27,15 @@ const catalogItemSchema = z.object({
   type: z.string().nullable().optional()
 });
 
+const coercedBooleanSchema = z.union([
+  z.boolean(),
+  z.string().transform((value) => value.toLowerCase() === "true")
+]);
+
 const paginatedCatalogResponseSchema = z.object({
-  currentPage: z.number().optional(),
-  hasNextPage: z.boolean().optional(),
-  lastPage: z.number().optional(),
+  currentPage: z.coerce.number().optional(),
+  hasNextPage: coercedBooleanSchema.optional(),
+  lastPage: z.coerce.number().optional(),
   data: z.array(catalogItemSchema).default([])
 });
 
@@ -55,6 +60,10 @@ const homeCatalogResponseSchema = z.object({
       Tv: []
     }),
   upcoming: z.array(catalogItemSchema).default([])
+});
+
+const providerErrorSchema = z.object({
+  error: z.string().min(1)
 });
 
 const episodeSchema = z.object({
@@ -164,14 +173,23 @@ export class SflixClient {
       ? await this.getDirectFlixhqFeedProvider().fetchHome()
       : await requestJson<unknown>(new URL("/movies/flixhq/home", this.requiredBaseUrl(this.flixhqBaseUrl)));
 
-    const parsed = homeCatalogResponseSchema.parse(response);
+    if (isProviderErrorResponse(response)) {
+      return this.buildHomeFallbackCatalog(response.error);
+    }
 
-    return {
+    const parsed = homeCatalogResponseSchema.parse(response);
+    const normalized = {
       featured: normalizeCatalogItems(parsed.featured),
       trendingMovies: normalizeCatalogItems(parsed.trending.Movies),
       recentMovieReleases: normalizeCatalogItems(parsed.recentReleases.Movies),
       upcoming: normalizeCatalogItems(parsed.upcoming)
-    };
+    } satisfies SflixHomeCatalog;
+
+    if (countHomeCatalogItems(normalized) === 0) {
+      return this.buildHomeFallbackCatalog("Home feed returned no movie items");
+    }
+
+    return normalized;
   }
 
   async getPopularMoviesCatalog(page = 1): Promise<SflixPaginatedCatalog> {
@@ -181,6 +199,7 @@ export class SflixClient {
           query: { page }
         });
 
+    assertNotProviderError(response, "popular-movies");
     return normalizePaginatedCatalog(response);
   }
 
@@ -191,7 +210,30 @@ export class SflixClient {
           query: { page }
         });
 
+    assertNotProviderError(response, "top-movies");
     return normalizePaginatedCatalog(response);
+  }
+
+  private async buildHomeFallbackCatalog(reason: string): Promise<SflixHomeCatalog> {
+    const [popular, top] = await Promise.all([
+      this.getPopularMoviesCatalog(1),
+      this.getTopMoviesCatalog(1)
+    ]);
+
+    const featured = dedupeCatalogItems([...popular.items.slice(0, 10), ...top.items.slice(0, 10)]);
+    const recentMovieReleases = dedupeCatalogItems(popular.items);
+    const trendingMovies = dedupeCatalogItems(top.items);
+
+    if (featured.length === 0 && recentMovieReleases.length === 0 && trendingMovies.length === 0) {
+      throw new Error(`Unable to build home feed fallback: ${reason}`);
+    }
+
+    return {
+      featured,
+      trendingMovies,
+      recentMovieReleases,
+      upcoming: []
+    };
   }
 
   private getDirectProvider(): DirectSflixProvider {
@@ -273,4 +315,41 @@ function normalizeCatalogItems(items: Array<z.infer<typeof catalogItemSchema>>):
   }
 
   return normalized;
+}
+
+function dedupeCatalogItems(items: SflixCatalogItem[]) {
+  const seen = new Set<string>();
+  const deduped: SflixCatalogItem[] = [];
+
+  for (const item of items) {
+    if (seen.has(item.id)) {
+      continue;
+    }
+
+    seen.add(item.id);
+    deduped.push(item);
+  }
+
+  return deduped;
+}
+
+function countHomeCatalogItems(catalog: SflixHomeCatalog) {
+  return (
+    catalog.featured.length +
+    catalog.trendingMovies.length +
+    catalog.recentMovieReleases.length +
+    catalog.upcoming.length
+  );
+}
+
+function isProviderErrorResponse(response: unknown): response is z.infer<typeof providerErrorSchema> {
+  return providerErrorSchema.safeParse(response).success;
+}
+
+function assertNotProviderError(response: unknown, feedName: string) {
+  const parsed = providerErrorSchema.safeParse(response);
+
+  if (parsed.success) {
+    throw new Error(`Upstream ${feedName} feed error: ${parsed.data.error}`);
+  }
 }
