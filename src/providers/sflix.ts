@@ -19,6 +19,34 @@ const searchResponseSchema = z.object({
   results: z.array(searchResultSchema)
 });
 
+const catalogItemSchema = z.object({
+  id: z.string().nullable().optional(),
+  name: z.string().nullable().optional(),
+  posterImage: z.string().nullable().optional(),
+  releaseDate: z.union([z.string(), z.number()]).nullable().optional(),
+  type: z.string().nullable().optional()
+});
+
+const paginatedCatalogResponseSchema = z.object({
+  currentPage: z.number().optional(),
+  hasNextPage: z.boolean().optional(),
+  lastPage: z.number().optional(),
+  data: z.array(catalogItemSchema).default([])
+});
+
+const homeCatalogResponseSchema = z.object({
+  featured: z.array(catalogItemSchema).default([]),
+  trending: z.object({
+    Movies: z.array(catalogItemSchema).default([]),
+    Tv: z.array(catalogItemSchema).default([])
+  }),
+  recentReleases: z.object({
+    Movies: z.array(catalogItemSchema).default([]),
+    Tv: z.array(catalogItemSchema).default([])
+  }),
+  upcoming: z.array(catalogItemSchema).default([])
+});
+
 const episodeSchema = z.object({
   id: z.string(),
   url: z.string().nullable().optional(),
@@ -46,10 +74,37 @@ const mediaInfoSchema = z.object({
 export type SflixSearchResult = z.infer<typeof searchResultSchema>;
 export type SflixMediaInfo = z.infer<typeof mediaInfoSchema>;
 export type SflixEpisode = z.infer<typeof episodeSchema>;
+export interface SflixCatalogItem {
+  id: string;
+  title: string;
+  image: string | null;
+  releaseDate: string | null;
+  type: string;
+}
+
+export interface SflixPaginatedCatalog {
+  items: SflixCatalogItem[];
+  currentPage: number | null;
+  hasNextPage: boolean | null;
+  lastPage: number | null;
+}
+
+export interface SflixHomeCatalog {
+  featured: SflixCatalogItem[];
+  trendingMovies: SflixCatalogItem[];
+  recentMovieReleases: SflixCatalogItem[];
+  upcoming: SflixCatalogItem[];
+}
 
 type DirectSflixProvider = {
   search: (query: string, page?: number) => Promise<unknown>;
   fetchMediaInfo: (id: string) => Promise<unknown>;
+};
+
+type DirectFlixhqFeedProvider = {
+  fetchHome: () => Promise<unknown>;
+  fetchPopularMovies: (page?: number) => Promise<unknown>;
+  fetchTopMovies: (page?: number) => Promise<unknown>;
 };
 
 export class SflixClient {
@@ -59,7 +114,12 @@ export class SflixClient {
     ? null
     : new URL("/movies/sflix/", env.SFLIX_BASE_URL);
 
+  private readonly flixhqBaseUrl = this.isDirectMode
+    ? null
+    : new URL("/movies/flixhq/", env.SFLIX_BASE_URL);
+
   private directProvider: DirectSflixProvider | null = null;
+  private directFlixhqFeedProvider: DirectFlixhqFeedProvider | null = null;
 
   async search(query: string): Promise<SflixSearchResult[]> {
     if (this.isDirectMode) {
@@ -89,6 +149,41 @@ export class SflixClient {
     return mediaInfoSchema.parse(response);
   }
 
+  async getHomeCatalog(): Promise<SflixHomeCatalog> {
+    const response = this.isDirectMode
+      ? await this.getDirectFlixhqFeedProvider().fetchHome()
+      : await requestJson<unknown>(new URL("/movies/flixhq/home", this.requiredBaseUrl(this.flixhqBaseUrl)));
+
+    const parsed = homeCatalogResponseSchema.parse(response);
+
+    return {
+      featured: normalizeCatalogItems(parsed.featured),
+      trendingMovies: normalizeCatalogItems(parsed.trending.Movies),
+      recentMovieReleases: normalizeCatalogItems(parsed.recentReleases.Movies),
+      upcoming: normalizeCatalogItems(parsed.upcoming)
+    };
+  }
+
+  async getPopularMoviesCatalog(page = 1): Promise<SflixPaginatedCatalog> {
+    const response = this.isDirectMode
+      ? await this.getDirectFlixhqFeedProvider().fetchPopularMovies(page)
+      : await requestJson<unknown>(new URL("/movies/flixhq/popular-movies", this.requiredBaseUrl(this.flixhqBaseUrl)), {
+          query: { page }
+        });
+
+    return normalizePaginatedCatalog(response);
+  }
+
+  async getTopMoviesCatalog(page = 1): Promise<SflixPaginatedCatalog> {
+    const response = this.isDirectMode
+      ? await this.getDirectFlixhqFeedProvider().fetchTopMovies(page)
+      : await requestJson<unknown>(new URL("/movies/flixhq/top-movies", this.requiredBaseUrl(this.flixhqBaseUrl)), {
+          query: { page }
+        });
+
+    return normalizePaginatedCatalog(response);
+  }
+
   private getDirectProvider(): DirectSflixProvider {
     if (this.directProvider) {
       return this.directProvider;
@@ -107,4 +202,65 @@ export class SflixClient {
     this.directProvider = configureProvider(new MOVIES.SFlix());
     return this.directProvider;
   }
+
+  private getDirectFlixhqFeedProvider(): DirectFlixhqFeedProvider {
+    if (this.directFlixhqFeedProvider) {
+      return this.directFlixhqFeedProvider;
+    }
+
+    const consumetRequire = createRequire(new URL("../../ConsumetAPI/package.json", import.meta.url));
+
+    try {
+      const { FlixHQProvider } = consumetRequire("./dist/providers/custom/flixhqProvider.js") as {
+        FlixHQProvider: DirectFlixhqFeedProvider;
+      };
+      this.directFlixhqFeedProvider = FlixHQProvider;
+      return this.directFlixhqFeedProvider;
+    } catch {
+      const { FlixHQProvider } = consumetRequire("./src/providers/custom/flixhqProvider.ts") as {
+        FlixHQProvider: DirectFlixhqFeedProvider;
+      };
+      this.directFlixhqFeedProvider = FlixHQProvider;
+      return this.directFlixhqFeedProvider;
+    }
+  }
+
+  private requiredBaseUrl(url: URL | null) {
+    if (!url) {
+      throw new Error("SFlix base URL is not configured.");
+    }
+
+    return url;
+  }
+}
+
+function normalizePaginatedCatalog(response: unknown): SflixPaginatedCatalog {
+  const parsed = paginatedCatalogResponseSchema.parse(response);
+
+  return {
+    items: normalizeCatalogItems(parsed.data),
+    currentPage: parsed.currentPage ?? null,
+    hasNextPage: parsed.hasNextPage ?? null,
+    lastPage: parsed.lastPage ?? null
+  };
+}
+
+function normalizeCatalogItems(items: Array<z.infer<typeof catalogItemSchema>>): SflixCatalogItem[] {
+  const normalized: SflixCatalogItem[] = [];
+
+  for (const item of items) {
+    if (!item.id || !item.name) {
+      continue;
+    }
+
+    normalized.push({
+      id: item.id,
+      title: item.name,
+      image: item.posterImage ?? null,
+      releaseDate: item.releaseDate == null ? null : String(item.releaseDate),
+      type: item.type ?? "Movie"
+    });
+  }
+
+  return normalized;
 }

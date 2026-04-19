@@ -109,12 +109,27 @@ If you use Prisma migrations directly, the project also includes [`prisma/migrat
 npm run ingest:search -- "breaking bad"
 ```
 
-The CLI:
+The query-based CLI:
 
 - searches SFlix
 - takes the first `INGEST_DEFAULT_LIMIT` results
 - enriches each result with TMDb when possible
 - stores media, localizations, seasons, episodes, external IDs, and subtitle metadata
+
+You can also ingest movie feeds directly:
+
+```bash
+npm run ingest:home -- --limit=20
+npm run ingest:popular-movies -- --page=1 --limit=20
+npm run ingest:top-movies -- --page=1 --limit=20
+```
+
+Feed ingestion:
+
+- ingests only movie entries
+- skips TV entries
+- deduplicates repeated provider IDs within the same batch
+- uses the same normalization pipeline as title search
 
 ### 5. Start the read API
 
@@ -135,6 +150,33 @@ curl http://127.0.0.1:4000/health
 ```bash
 npm run ingest:search -- "the batman"
 ```
+
+### Batch ingest from movie feeds
+
+Home feed movies:
+
+```bash
+npm run ingest:home -- --limit=20
+```
+
+Popular movies:
+
+```bash
+npm run ingest:popular-movies -- --page=1 --limit=20
+```
+
+Top movies:
+
+```bash
+npm run ingest:top-movies -- --page=1 --limit=20
+```
+
+Notes:
+
+- `ingest:home` collects movie items from featured, trending, recent releases, and upcoming sections
+- `ingest:popular-movies` ingests the selected page from the popular movies list
+- `ingest:top-movies` ingests the selected page from the top movies list
+- `--limit` is optional and caps how many unique provider items are processed in that run
 
 ### Read from the API
 
@@ -189,6 +231,9 @@ Run manual ingestion:
 
 ```bash
 docker compose --profile manual run --rm ingestor npm run ingest:search -- "breaking bad"
+docker compose --profile manual run --rm ingestor npm run ingest:home -- --limit=20
+docker compose --profile manual run --rm ingestor npm run ingest:popular-movies -- --page=1 --limit=20
+docker compose --profile manual run --rm ingestor npm run ingest:top-movies -- --page=1 --limit=20
 ```
 
 Verify:
@@ -262,13 +307,16 @@ npm run build
 npm run typecheck
 npm run api:start
 npm run ingest:search -- "movie title"
+npm run ingest:home -- --limit=20
+npm run ingest:popular-movies -- --page=1 --limit=20
+npm run ingest:top-movies -- --page=1 --limit=20
 npm run ingest:subtitles
 ```
 
 Notes:
 
 - `npm run ingest:subtitles` is currently a placeholder and not implemented as a separate worker
-- the main supported ingestion path today is `npm run ingest:search -- "title"`
+- supported ingestion paths today include title search and movie-feed batch ingestion
 
 ## Data Model Overview
 
@@ -297,6 +345,7 @@ The Prisma schema is available at [`prisma/schema.prisma`](./prisma/schema.prism
 
 - subtitle backfill worker is not implemented separately yet
 - ingestion currently works best as a manual or scheduled admin workflow
+- feed-based batch ingest currently covers `home`, `popular-movies`, and `top-movies`
 - public API auth, quota control, and rate limiting are expected to be handled at the reverse proxy or infrastructure layer
 
 ## Recommended Public Deployment

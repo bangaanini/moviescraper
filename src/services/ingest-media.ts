@@ -1,5 +1,5 @@
 import type { OpenSubtitlesSearchItem } from "../providers/opensubtitles.js";
-import type { SflixMediaInfo, SflixSearchResult } from "../providers/sflix.js";
+import type { SflixCatalogItem, SflixMediaInfo, SflixSearchResult } from "../providers/sflix.js";
 import type { TmdbBundle, TmdbMatch } from "../providers/tmdb.js";
 import { OpenSubtitlesClient } from "../providers/opensubtitles.js";
 import { SflixClient } from "../providers/sflix.js";
@@ -28,13 +28,122 @@ export class MediaIngestService {
 
     logger.info({ query: input.query, count: slice.length }, "Fetched SFlix search results");
 
-    for (const result of slice) {
-      await this.ingestSearchResult(result);
+    await this.ingestProviderIds(
+      slice.map((result) => result.id),
+      { source: "search", query: input.query }
+    );
+  }
+
+  async ingestHome(input: { limit?: number } = {}): Promise<void> {
+    const home = await this.sflix.getHomeCatalog();
+    const candidates = [
+      ...home.featured.filter(isMovieCatalogItem),
+      ...home.trendingMovies.filter(isMovieCatalogItem),
+      ...home.recentMovieReleases.filter(isMovieCatalogItem),
+      ...home.upcoming.filter(isMovieCatalogItem)
+    ];
+
+    logger.info(
+      {
+        featuredCount: home.featured.filter(isMovieCatalogItem).length,
+        trendingMovieCount: home.trendingMovies.filter(isMovieCatalogItem).length,
+        recentMovieCount: home.recentMovieReleases.filter(isMovieCatalogItem).length,
+        upcomingMovieCount: home.upcoming.filter(isMovieCatalogItem).length
+      },
+      "Fetched SFlix home feed"
+    );
+
+    await this.ingestCatalogItems(candidates, {
+      source: "home",
+      ...(input.limit !== undefined ? { limit: input.limit } : {})
+    });
+  }
+
+  async ingestPopularMovies(input: { page?: number; limit?: number } = {}): Promise<void> {
+    const page = input.page ?? 1;
+    const feed = await this.sflix.getPopularMoviesCatalog(page);
+
+    logger.info(
+      {
+        source: "popular-movies",
+        page,
+        fetchedCount: feed.items.length,
+        hasNextPage: feed.hasNextPage,
+        lastPage: feed.lastPage
+      },
+      "Fetched SFlix feed results"
+    );
+
+    await this.ingestCatalogItems(feed.items.filter(isMovieCatalogItem), {
+      source: "popular-movies",
+      page,
+      ...(input.limit !== undefined ? { limit: input.limit } : {})
+    });
+  }
+
+  async ingestTopMovies(input: { page?: number; limit?: number } = {}): Promise<void> {
+    const page = input.page ?? 1;
+    const feed = await this.sflix.getTopMoviesCatalog(page);
+
+    logger.info(
+      {
+        source: "top-movies",
+        page,
+        fetchedCount: feed.items.length,
+        hasNextPage: feed.hasNextPage,
+        lastPage: feed.lastPage
+      },
+      "Fetched SFlix feed results"
+    );
+
+    await this.ingestCatalogItems(feed.items.filter(isMovieCatalogItem), {
+      source: "top-movies",
+      page,
+      ...(input.limit !== undefined ? { limit: input.limit } : {})
+    });
+  }
+
+  private async ingestCatalogItems(
+    items: SflixCatalogItem[],
+    context: { source: string; limit?: number; page?: number }
+  ) {
+    await this.ingestProviderIds(
+      items.map((item) => item.id),
+      context
+    );
+  }
+
+  private async ingestProviderIds(
+    ids: string[],
+    context: {
+      source: string;
+      query?: string;
+      page?: number;
+      limit?: number;
+    }
+  ) {
+    const dedupedIds = Array.from(new Set(ids.filter((id) => id.trim().length > 0)));
+    const slice = context.limit ? dedupedIds.slice(0, context.limit) : dedupedIds;
+
+    logger.info(
+      {
+        source: context.source,
+        query: context.query,
+        page: context.page,
+        fetchedCount: ids.length,
+        uniqueCount: dedupedIds.length,
+        ingestCount: slice.length
+      },
+      "Prepared SFlix items for ingestion"
+    );
+
+    for (const id of slice) {
+      await this.ingestProviderId(id);
     }
   }
 
-  private async ingestSearchResult(result: SflixSearchResult): Promise<void> {
-    const mediaInfo = await this.sflix.getMediaInfo(result.id);
+  private async ingestProviderId(id: string): Promise<void> {
+    const mediaInfo = await this.sflix.getMediaInfo(id);
     const mediaType = normalizeMediaType(mediaInfo.type);
     const year = extractYear(mediaInfo.releaseDate);
     const { tmdbMatch, tmdbBundle } = await this.tryResolveTmdb(mediaInfo.title, mediaType, year);
@@ -634,6 +743,10 @@ export class MediaIngestService {
       throw error;
     }
   }
+}
+
+function isMovieCatalogItem(item: SflixCatalogItem) {
+  return normalizeMediaType(item.type) === "movie";
 }
 
 function normalizeMediaType(type: string): "movie" | "tv" {

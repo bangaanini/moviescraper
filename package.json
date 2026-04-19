@@ -12,6 +12,9 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "api:start": "tsx src/app-api/server.ts",
     "ingest:search": "tsx src/cli/search-and-ingest.ts",
+    "ingest:home": "tsx src/cli/ingest-feed.ts home",
+    "ingest:popular-movies": "tsx src/cli/ingest-feed.ts popular-movies",
+    "ingest:top-movies": "tsx src/cli/ingest-feed.ts top-movies",
     "ingest:subtitles": "tsx src/cli/backfill-subtitles.ts",
     "prisma:generate": "prisma generate",
     "prisma:migrate:deploy": "prisma migrate deploy"
