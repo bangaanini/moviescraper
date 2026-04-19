@@ -9,6 +9,7 @@ const envSchema = z.object({
   SUPABASE_URL: z.string().url(),
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
   APP_API_PORT: z.coerce.number().int().positive().default(4000),
+  APP_API_CORS_ALLOWED_ORIGINS: z.string().default("*"),
   SFLIX_BASE_URL: z.string().min(1).default("local://consumet"),
   TMDB_API_TOKEN: z.string().min(1),
   TMDB_DEFAULT_LANGUAGE: z.string().default("id-ID"),

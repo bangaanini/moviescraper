@@ -5,6 +5,7 @@ import { logger } from "../lib/logger.js";
 import { CatalogRepository } from "./catalog-repository.js";
 
 const repository = new CatalogRepository();
+const corsConfig = parseCorsAllowedOrigins(env.APP_API_CORS_ALLOWED_ORIGINS);
 
 const routes = [
   {
@@ -108,8 +109,14 @@ const server = createServer(async (incomingRequest, outgoingResponse) => {
     method: incomingRequest.method ?? "GET",
     headers: toHeaders(incomingRequest.headers)
   });
+  const corsHeaders = buildCorsHeaders(request);
 
   try {
+    if (request.method === "OPTIONS") {
+      await writeResponse(outgoingResponse, new Response(null, { status: 204, headers: corsHeaders }));
+      return;
+    }
+
     for (const route of routes) {
       if (route.method !== request.method) {
         continue;
@@ -122,11 +129,14 @@ const server = createServer(async (incomingRequest, outgoingResponse) => {
 
       const result = await route.handler(request, match);
       const response = result instanceof Response ? result : jsonResponse(result);
-      await writeResponse(outgoingResponse, response);
+      await writeResponse(outgoingResponse, withCorsHeaders(response, corsHeaders));
       return;
     }
 
-    await writeResponse(outgoingResponse, jsonResponse({ error: "Not found" }, 404));
+    await writeResponse(
+      outgoingResponse,
+      withCorsHeaders(jsonResponse({ error: "Not found" }, 404), corsHeaders)
+    );
   } catch (error) {
     logger.error(
       {
@@ -137,7 +147,10 @@ const server = createServer(async (incomingRequest, outgoingResponse) => {
       "app-api request failed"
     );
 
-    await writeResponse(outgoingResponse, jsonResponse({ error: "Internal server error" }, 500));
+    await writeResponse(
+      outgoingResponse,
+      withCorsHeaders(jsonResponse({ error: "Internal server error" }, 500), corsHeaders)
+    );
   }
 });
 
@@ -152,6 +165,20 @@ function jsonResponse(body: unknown, status = 200) {
       "content-type": "application/json; charset=utf-8",
       "cache-control": "no-store"
     }
+  });
+}
+
+function withCorsHeaders(response: Response, corsHeaders: Headers) {
+  const headers = new Headers(response.headers);
+
+  for (const [key, value] of corsHeaders.entries()) {
+    headers.set(key, value);
+  }
+
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers
   });
 }
 
@@ -249,4 +276,39 @@ function requiredPathGroup(match: URLPatternResult, key: string) {
   }
 
   return value;
+}
+
+function parseCorsAllowedOrigins(value: string) {
+  const origins = value
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+
+  if (origins.length === 0 || origins.includes("*")) {
+    return { allowAnyOrigin: true, origins: [] as string[] };
+  }
+
+  return { allowAnyOrigin: false, origins };
+}
+
+function buildCorsHeaders(request: Request) {
+  const headers = new Headers({
+    "access-control-allow-methods": "GET, OPTIONS",
+    "access-control-allow-headers": "Content-Type, Authorization",
+    "access-control-max-age": "86400"
+  });
+
+  if (corsConfig.allowAnyOrigin) {
+    headers.set("access-control-allow-origin", "*");
+    return headers;
+  }
+
+  const origin = request.headers.get("origin");
+
+  if (origin && corsConfig.origins.includes(origin)) {
+    headers.set("access-control-allow-origin", origin);
+    headers.set("vary", "Origin");
+  }
+
+  return headers;
 }
