@@ -25,6 +25,27 @@ const searchResponseSchema = z.object({
   results: z.array(searchResultSchema)
 });
 
+const paginatedMovieListItemSchema = z.object({
+  id: z.number(),
+  title: z.string().optional(),
+  original_title: z.string().optional(),
+  overview: z.string().optional(),
+  poster_path: z.string().nullable().optional(),
+  backdrop_path: z.string().nullable().optional(),
+  release_date: z.string().nullable().optional(),
+  vote_average: z.number().optional(),
+  vote_count: z.number().optional(),
+  popularity: z.number().optional(),
+  adult: z.boolean().optional()
+});
+
+const paginatedMovieListResponseSchema = z.object({
+  page: z.coerce.number(),
+  total_pages: z.coerce.number().optional(),
+  total_results: z.coerce.number().optional(),
+  results: z.array(paginatedMovieListItemSchema).default([])
+});
+
 const seasonSchema = z.object({
   season_number: z.number(),
   name: z.string().optional(),
@@ -117,6 +138,32 @@ export interface TmdbTvBundle {
 
 export type TmdbBundle = TmdbMovieBundle | TmdbTvBundle;
 
+export interface TmdbMovieFeedItem {
+  id: number;
+  title: string;
+  originalTitle: string;
+  overview: string | null;
+  releaseDate: string | null;
+  posterPath: string | null;
+  backdropPath: string | null;
+  popularity: number | null;
+  voteAverage: number | null;
+  voteCount: number | null;
+}
+
+export interface TmdbPaginatedMovieFeed {
+  page: number;
+  totalPages: number | null;
+  totalResults: number | null;
+  items: TmdbMovieFeedItem[];
+}
+
+export interface TmdbHomeMovieFeed {
+  featured: TmdbMovieFeedItem[];
+  popular: TmdbMovieFeedItem[];
+  upcoming: TmdbMovieFeedItem[];
+}
+
 export class TmdbClient {
   private readonly baseUrl = "https://api.themoviedb.org/3";
 
@@ -183,6 +230,28 @@ export class TmdbClient {
     };
   }
 
+  async getHomeMovieFeed(page = 1): Promise<TmdbHomeMovieFeed> {
+    const [featured, popular, upcoming] = await Promise.all([
+      this.requestMovieList("/trending/movie/day", page),
+      this.requestMovieList("/movie/popular", page),
+      this.requestMovieList("/movie/upcoming", page)
+    ]);
+
+    return {
+      featured: featured.items,
+      popular: popular.items,
+      upcoming: upcoming.items
+    };
+  }
+
+  async getPopularMoviesFeed(page = 1): Promise<TmdbPaginatedMovieFeed> {
+    return this.requestMovieList("/movie/popular", page);
+  }
+
+  async getTopMoviesFeed(page = 1): Promise<TmdbPaginatedMovieFeed> {
+    return this.requestMovieList("/movie/top_rated", page);
+  }
+
   imageUrl(path: string | null | undefined): string | null {
     if (!path) {
       return null;
@@ -213,6 +282,35 @@ export class TmdbClient {
       query: { language }
     });
     return seasonDetailsSchema.parse(response);
+  }
+
+  private async requestMovieList(path: string, page: number) {
+    const response = await this.request<unknown>(path, {
+      query: {
+        language: env.TMDB_DEFAULT_LANGUAGE,
+        page
+      }
+    });
+
+    const parsed = paginatedMovieListResponseSchema.parse(response);
+
+    return {
+      page: parsed.page,
+      totalPages: parsed.total_pages ?? null,
+      totalResults: parsed.total_results ?? null,
+      items: parsed.results.map((item) => ({
+        id: item.id,
+        title: item.title ?? item.original_title ?? String(item.id),
+        originalTitle: item.original_title ?? item.title ?? String(item.id),
+        overview: item.overview ?? null,
+        releaseDate: item.release_date ?? null,
+        posterPath: item.poster_path ?? null,
+        backdropPath: item.backdrop_path ?? null,
+        popularity: item.popularity ?? null,
+        voteAverage: item.vote_average ?? null,
+        voteCount: item.vote_count ?? null
+      }))
+    } satisfies TmdbPaginatedMovieFeed;
   }
 
   private async request<T>(

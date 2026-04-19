@@ -1,6 +1,6 @@
 import type { OpenSubtitlesSearchItem } from "../providers/opensubtitles.js";
-import type { SflixCatalogItem, SflixMediaInfo } from "../providers/sflix.js";
-import type { TmdbBundle, TmdbMatch } from "../providers/tmdb.js";
+import type { SflixMediaInfo, SflixSearchResult } from "../providers/sflix.js";
+import type { TmdbBundle, TmdbMatch, TmdbMovieFeedItem } from "../providers/tmdb.js";
 import { OpenSubtitlesClient } from "../providers/opensubtitles.js";
 import { SflixClient } from "../providers/sflix.js";
 import { TmdbClient } from "../providers/tmdb.js";
@@ -45,14 +45,13 @@ export class MediaIngestService {
     }
 
     const pageNumber = Math.floor(offset / limit) + 1;
-    const home = await this.sflix.getHomeCatalog();
-    const candidates = dedupeCatalogItems([
-      ...home.featured.filter(isMovieCatalogItem),
-      ...home.trendingMovies.filter(isMovieCatalogItem),
-      ...home.recentMovieReleases.filter(isMovieCatalogItem),
-      ...home.upcoming.filter(isMovieCatalogItem)
+    const home = await this.tmdb.getHomeMovieFeed(pageNumber);
+    const candidates = dedupeTmdbMovieFeedItems([
+      ...home.featured,
+      ...home.popular,
+      ...home.upcoming
     ]);
-    const slice = candidates.slice(offset, offset + limit);
+    const slice = input.offset !== undefined ? candidates.slice(offset, offset + limit) : candidates.slice(0, limit);
 
     logger.info(
       {
@@ -62,15 +61,14 @@ export class MediaIngestService {
         offset,
         totalMovieCount: candidates.length,
         ingestCount: slice.length,
-        featuredCount: home.featured.filter(isMovieCatalogItem).length,
-        trendingMovieCount: home.trendingMovies.filter(isMovieCatalogItem).length,
-        recentMovieCount: home.recentMovieReleases.filter(isMovieCatalogItem).length,
-        upcomingMovieCount: home.upcoming.filter(isMovieCatalogItem).length
+        featuredCount: home.featured.length,
+        popularMovieCount: home.popular.length,
+        upcomingMovieCount: home.upcoming.length
       },
-      "Fetched SFlix home feed"
+      "Fetched TMDb home feed"
     );
 
-    await this.ingestCatalogFeedItems(slice, {
+    await this.ingestTmdbFeedItems(slice, {
       feedKind: "home",
       pageNumber
     });
@@ -79,8 +77,8 @@ export class MediaIngestService {
   async ingestPopularMovies(input: { page?: number; limit?: number } = {}): Promise<void> {
     const page = input.page ?? 1;
     const limit = input.limit ?? 20;
-    const feed = await this.sflix.getPopularMoviesCatalog(page);
-    const slice = feed.items.filter(isMovieCatalogItem).slice(0, limit);
+    const feed = await this.tmdb.getPopularMoviesFeed(page);
+    const slice = feed.items.slice(0, limit);
 
     logger.info(
       {
@@ -89,13 +87,13 @@ export class MediaIngestService {
         limit,
         fetchedCount: feed.items.length,
         ingestCount: slice.length,
-        hasNextPage: feed.hasNextPage,
-        lastPage: feed.lastPage
+        totalPages: feed.totalPages,
+        totalResults: feed.totalResults
       },
-      "Fetched SFlix feed results"
+      "Fetched TMDb feed results"
     );
 
-    await this.ingestCatalogFeedItems(slice, {
+    await this.ingestTmdbFeedItems(slice, {
       feedKind: "popular-movies",
       pageNumber: page
     });
@@ -104,8 +102,8 @@ export class MediaIngestService {
   async ingestTopMovies(input: { page?: number; limit?: number } = {}): Promise<void> {
     const page = input.page ?? 1;
     const limit = input.limit ?? 20;
-    const feed = await this.sflix.getTopMoviesCatalog(page);
-    const slice = feed.items.filter(isMovieCatalogItem).slice(0, limit);
+    const feed = await this.tmdb.getTopMoviesFeed(page);
+    const slice = feed.items.slice(0, limit);
 
     logger.info(
       {
@@ -114,27 +112,28 @@ export class MediaIngestService {
         limit,
         fetchedCount: feed.items.length,
         ingestCount: slice.length,
-        hasNextPage: feed.hasNextPage,
-        lastPage: feed.lastPage
+        totalPages: feed.totalPages,
+        totalResults: feed.totalResults
       },
-      "Fetched SFlix feed results"
+      "Fetched TMDb feed results"
     );
 
-    await this.ingestCatalogFeedItems(slice, {
+    await this.ingestTmdbFeedItems(slice, {
       feedKind: "top-movies",
       pageNumber: page
     });
   }
 
-  private async ingestCatalogFeedItems(
-    items: SflixCatalogItem[],
+  private async ingestTmdbFeedItems(
+    items: TmdbMovieFeedItem[],
     context: { feedKind: FeedKind; pageNumber: number }
   ) {
-    const orderedItems = items.map((item, index) => ({
-      id: item.id,
-      position: index + 1
-    }));
-    const successes = await this.ingestOrderedProviderIds(orderedItems, {
+    const successes = await this.ingestOrderedTmdbFeedItems(
+      items.map((item, index) => ({
+        item,
+        position: index + 1
+      })),
+      {
       source: context.feedKind,
       page: context.pageNumber
     });
@@ -215,6 +214,70 @@ export class MediaIngestService {
     return successes;
   }
 
+  private async ingestOrderedTmdbFeedItems(
+    items: Array<{ item: TmdbMovieFeedItem; position: number }>,
+    context: { source: string; page?: number }
+  ) {
+    const successes: Array<{
+      mediaId: number;
+      sourceExternalId: string;
+      sourceProvider: string;
+      position: number;
+    }> = [];
+
+    for (const entry of items) {
+      try {
+        const providerId = await this.resolveSflixProviderIdForTmdbMovie(entry.item);
+
+        if (!providerId) {
+          logger.warn(
+            {
+              source: context.source,
+              page: context.page,
+              tmdbId: entry.item.id,
+              title: entry.item.title,
+              originalTitle: entry.item.originalTitle
+            },
+            "No matching SFlix result found for TMDb movie"
+          );
+          continue;
+        }
+
+        const mediaRow = await this.ingestProviderId(providerId);
+        successes.push({
+          mediaId: mediaRow.id,
+          sourceExternalId: String(entry.item.id),
+          sourceProvider: "tmdb",
+          position: entry.position
+        });
+      } catch (error) {
+        logger.error(
+          {
+            source: context.source,
+            page: context.page,
+            tmdbId: entry.item.id,
+            title: entry.item.title,
+            err: error
+          },
+          "TMDb feed item ingest failed"
+        );
+      }
+    }
+
+    logger.info(
+      {
+        source: context.source,
+        page: context.page,
+        attemptedCount: items.length,
+        succeededCount: successes.length,
+        failedCount: items.length - successes.length
+      },
+      "Completed TMDb feed ingestion batch"
+    );
+
+    return successes;
+  }
+
   private async ingestProviderId(id: string): Promise<InsertedMediaRow> {
     const mediaInfo = await this.sflix.getMediaInfo(id);
     const mediaType = normalizeMediaType(mediaInfo.type);
@@ -246,7 +309,12 @@ export class MediaIngestService {
   private async replaceFeedPage(
     feedKind: FeedKind,
     pageNumber: number,
-    items: Array<{ mediaId: number; sourceExternalId: string; position: number }>
+    items: Array<{
+      mediaId: number;
+      sourceExternalId: string;
+      sourceProvider: string;
+      position: number;
+    }>
   ) {
     if (items.length === 0) {
       logger.warn({ feedKind, pageNumber }, "Skipping feed page replacement because no items were ingested");
@@ -269,7 +337,7 @@ export class MediaIngestService {
       page_number: pageNumber,
       position: item.position,
       media_id: item.mediaId,
-      source_provider: "sflix",
+      source_provider: item.sourceProvider,
       source_external_id: item.sourceExternalId,
       fetched_at: fetchedAt
     }));
@@ -281,6 +349,56 @@ export class MediaIngestService {
     }
 
     logger.info({ feedKind, pageNumber, count: rows.length }, "Feed page stored");
+  }
+
+  private async resolveSflixProviderIdForTmdbMovie(item: TmdbMovieFeedItem) {
+    const queryCandidates = uniqueNonEmptyStrings([item.originalTitle, item.title]);
+
+    for (const query of queryCandidates) {
+      const results = await this.sflix.search(query);
+      const match = await this.findMatchingSflixResultForTmdbMovie(results.slice(0, 5), item);
+
+      if (match) {
+        return match.id;
+      }
+    }
+
+    return null;
+  }
+
+  private async findMatchingSflixResultForTmdbMovie(
+    results: SflixSearchResult[],
+    item: TmdbMovieFeedItem
+  ) {
+    for (const result of results) {
+      try {
+        const mediaInfo = await this.sflix.getMediaInfo(result.id);
+        const mediaType = normalizeMediaType(mediaInfo.type);
+
+        if (mediaType !== "movie") {
+          continue;
+        }
+
+        const year = extractYear(mediaInfo.releaseDate);
+        const { tmdbMatch } = await this.tryResolveTmdb(mediaInfo.title, mediaType, year);
+
+        if (tmdbMatch?.type === "movie" && tmdbMatch.id === item.id) {
+          return result;
+        }
+      } catch (error) {
+        logger.warn(
+          {
+            tmdbId: item.id,
+            sflixId: result.id,
+            title: result.title,
+            err: error
+          },
+          "SFlix candidate match evaluation failed"
+        );
+      }
+    }
+
+    return null;
   }
 
   private async tryResolveTmdb(
@@ -860,13 +978,9 @@ export class MediaIngestService {
   }
 }
 
-function isMovieCatalogItem(item: SflixCatalogItem) {
-  return normalizeMediaType(item.type) === "movie";
-}
-
-function dedupeCatalogItems(items: SflixCatalogItem[]) {
-  const seen = new Set<string>();
-  const deduped: SflixCatalogItem[] = [];
+function dedupeTmdbMovieFeedItems(items: TmdbMovieFeedItem[]) {
+  const seen = new Set<number>();
+  const deduped: TmdbMovieFeedItem[] = [];
 
   for (const item of items) {
     if (seen.has(item.id)) {
@@ -878,6 +992,12 @@ function dedupeCatalogItems(items: SflixCatalogItem[]) {
   }
 
   return deduped;
+}
+
+function uniqueNonEmptyStrings(values: Array<string | null | undefined>) {
+  return Array.from(
+    new Set(values.filter((value): value is string => typeof value === "string" && value.trim().length > 0))
+  );
 }
 
 function normalizeMediaType(type: string): "movie" | "tv" {

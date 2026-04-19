@@ -9,7 +9,7 @@ This project searches titles from SFlix/Consumet, enriches them with TMDb metada
 - searches movies and TV shows from the SFlix provider
 - enriches metadata with TMDb localized data, including Indonesian titles and overviews
 - stores canonical media records, seasons, episodes, external IDs, and subtitle track metadata in Supabase
-- stores feed snapshots for `home`, `popular-movies`, and `top-movies`
+- stores TMDb-based feed snapshots for `home`, `popular-movies`, and `top-movies`
 - exposes a small read-only API for frontend consumption
 - supports public API deployment behind Nginx
 - supports browser-based frontend access with configurable CORS
@@ -128,10 +128,12 @@ npm run ingest:top-movies -- --page=1 --limit=20
 
 Feed ingestion:
 
+- uses TMDb movie feeds as the batch source
+- resolves each movie into a matching SFlix item before ingesting
 - ingests only movie entries
 - skips TV entries
-- deduplicates repeated provider IDs within the same batch
-- uses the same normalization pipeline as title search
+- stores feed pages by TMDb source page and resolved media match
+- uses the same normalization pipeline as title search after the SFlix match is found
 - stores the feed page in `media_feed_items` so frontend can read the same page later
 
 ### 5. Start the read API
@@ -177,9 +179,9 @@ npm run ingest:top-movies -- --page=1 --limit=20
 
 Notes:
 
-- `ingest:home` collects movie items from featured, trending, recent releases, and upcoming sections, deduplicates them, then slices by page and limit
-- `ingest:popular-movies` ingests the selected page from the popular movies list
-- `ingest:top-movies` ingests the selected page from the top movies list
+- `ingest:home` builds the home feed from TMDb trending, popular, and upcoming movies for the requested page
+- `ingest:popular-movies` ingests the selected TMDb popular movies page
+- `ingest:top-movies` ingests the selected TMDb top rated movies page
 - `--limit` defaults to `20` for feed ingest commands
 - `ingest:home` also supports `--offset`, but `--page` is the recommended public-facing option
 
