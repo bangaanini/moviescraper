@@ -9,6 +9,7 @@ This project searches titles from SFlix/Consumet, enriches them with TMDb metada
 - searches movies and TV shows from the SFlix provider
 - enriches metadata with TMDb localized data, including Indonesian titles and overviews
 - stores canonical media records, seasons, episodes, external IDs, and subtitle track metadata in Supabase
+- stores feed snapshots for `home`, `popular-movies`, and `top-movies`
 - exposes a small read-only API for frontend consumption
 - supports public API deployment behind Nginx
 - supports browser-based frontend access with configurable CORS
@@ -32,7 +33,8 @@ In production, the services are typically used like this:
 - Indonesian and English localization fallback
 - seasons and episodes for TV content
 - subtitle track discovery and ranking
-- simple HTTP API for list, detail, seasons, episodes, and subtitles
+- feed snapshot storage for frontend sections and pagination
+- simple HTTP API for list, home, popular, top, detail, seasons, episodes, and subtitles
 - Docker Compose deployment for VPS
 - domain and SSL setup with Nginx
 
@@ -119,7 +121,7 @@ The query-based CLI:
 You can also ingest movie feeds directly:
 
 ```bash
-npm run ingest:home -- --limit=20
+npm run ingest:home -- --page=1 --limit=20
 npm run ingest:popular-movies -- --page=1 --limit=20
 npm run ingest:top-movies -- --page=1 --limit=20
 ```
@@ -130,6 +132,7 @@ Feed ingestion:
 - skips TV entries
 - deduplicates repeated provider IDs within the same batch
 - uses the same normalization pipeline as title search
+- stores the feed page in `media_feed_items` so frontend can read the same page later
 
 ### 5. Start the read API
 
@@ -156,7 +159,8 @@ npm run ingest:search -- "the batman"
 Home feed movies:
 
 ```bash
-npm run ingest:home -- --limit=20
+npm run ingest:home -- --page=1 --limit=20
+npm run ingest:home -- --page=2 --limit=20
 ```
 
 Popular movies:
@@ -173,12 +177,32 @@ npm run ingest:top-movies -- --page=1 --limit=20
 
 Notes:
 
-- `ingest:home` collects movie items from featured, trending, recent releases, and upcoming sections
+- `ingest:home` collects movie items from featured, trending, recent releases, and upcoming sections, deduplicates them, then slices by page and limit
 - `ingest:popular-movies` ingests the selected page from the popular movies list
 - `ingest:top-movies` ingests the selected page from the top movies list
-- `--limit` is optional and caps how many unique provider items are processed in that run
+- `--limit` defaults to `20` for feed ingest commands
+- `ingest:home` also supports `--offset`, but `--page` is the recommended public-facing option
 
 ### Read from the API
+
+Get stored home feed page:
+
+```bash
+curl "http://127.0.0.1:4000/api/home?page=1&limit=20&lang=id"
+curl "http://127.0.0.1:4000/api/home?page=2&limit=20&lang=id"
+```
+
+Get stored popular movies page:
+
+```bash
+curl "http://127.0.0.1:4000/api/popular-movies?page=1&limit=20&lang=id"
+```
+
+Get stored top movies page:
+
+```bash
+curl "http://127.0.0.1:4000/api/top-movies?page=1&limit=20&lang=id"
+```
 
 List media:
 
@@ -231,7 +255,7 @@ Run manual ingestion:
 
 ```bash
 docker compose --profile manual run --rm ingestor npm run ingest:search -- "breaking bad"
-docker compose --profile manual run --rm ingestor npm run ingest:home -- --limit=20
+docker compose --profile manual run --rm ingestor npm run ingest:home -- --page=1 --limit=20
 docker compose --profile manual run --rm ingestor npm run ingest:popular-movies -- --page=1 --limit=20
 docker compose --profile manual run --rm ingestor npm run ingest:top-movies -- --page=1 --limit=20
 ```
@@ -254,9 +278,7 @@ This project is intended to be consumed from a separate frontend.
 Example:
 
 ```ts
-const response = await fetch(
-  "https://api.buffers.site/api/media?q=breaking%20bad&lang=id&page=1&limit=20"
-);
+const response = await fetch("https://api.buffers.site/api/home?page=1&limit=20&lang=id");
 
 const data = await response.json();
 console.log(data.items);
@@ -307,7 +329,7 @@ npm run build
 npm run typecheck
 npm run api:start
 npm run ingest:search -- "movie title"
-npm run ingest:home -- --limit=20
+npm run ingest:home -- --page=1 --limit=20
 npm run ingest:popular-movies -- --page=1 --limit=20
 npm run ingest:top-movies -- --page=1 --limit=20
 npm run ingest:subtitles
@@ -328,6 +350,7 @@ Main tables:
 - `public.seasons`
 - `public.episodes`
 - `public.episode_external_ids`
+- `public.media_feed_items`
 - `public.subtitle_tracks`
 - `internal.ingestion_jobs`
 - `internal.provider_payloads`
@@ -346,6 +369,7 @@ The Prisma schema is available at [`prisma/schema.prisma`](./prisma/schema.prism
 - subtitle backfill worker is not implemented separately yet
 - ingestion currently works best as a manual or scheduled admin workflow
 - feed-based batch ingest currently covers `home`, `popular-movies`, and `top-movies`
+- feed read endpoints return only data that has already been ingested and stored
 - public API auth, quota control, and rate limiting are expected to be handled at the reverse proxy or infrastructure layer
 
 ## Recommended Public Deployment

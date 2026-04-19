@@ -54,6 +54,7 @@ model Media {
   seasons            Season[]
   episodes           Episode[]
   subtitleTracks     SubtitleTrack[]
+  feedItems          MediaFeedItem[]
 
   @@unique([canonicalProvider, canonicalExternalId], map: "media_canonical_unique")
   @@map("media")
@@ -182,6 +183,25 @@ model SubtitleTrack {
 
   @@unique([provider, externalFileId], map: "subtitle_tracks_provider_file_unique_idx")
   @@map("subtitle_tracks")
+  @@schema("public")
+}
+
+model MediaFeedItem {
+  id               BigInt   @id @default(autoincrement()) @db.BigInt
+  feedKind         String   @map("feed_kind")
+  pageNumber       Int      @map("page_number")
+  position         Int
+  mediaId          BigInt   @map("media_id") @db.BigInt
+  sourceProvider   String   @map("source_provider")
+  sourceExternalId String   @map("source_external_id")
+  fetchedAt        DateTime @default(now()) @map("fetched_at") @db.Timestamptz(6)
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  media            Media    @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+
+  @@unique([feedKind, pageNumber, position], map: "media_feed_items_unique_position")
+  @@unique([feedKind, pageNumber, mediaId], map: "media_feed_items_unique_media")
+  @@map("media_feed_items")
   @@schema("public")
 }
 

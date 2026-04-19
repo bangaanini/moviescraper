@@ -35,6 +35,45 @@ const routes = [
   },
   {
     method: "GET",
+    pattern: new URLPattern({ pathname: "/api/home" }),
+    handler: async (request: Request) => {
+      const url = new URL(request.url);
+      return repository.getFeedPage({
+        feedKind: "home",
+        lang: normalizeLang(url.searchParams.get("lang")),
+        page: parsePositiveInteger(url.searchParams.get("page"), 1),
+        limit: parsePositiveInteger(url.searchParams.get("limit"), 20, 100)
+      });
+    }
+  },
+  {
+    method: "GET",
+    pattern: new URLPattern({ pathname: "/api/popular-movies" }),
+    handler: async (request: Request) => {
+      const url = new URL(request.url);
+      return repository.getFeedPage({
+        feedKind: "popular-movies",
+        lang: normalizeLang(url.searchParams.get("lang")),
+        page: parsePositiveInteger(url.searchParams.get("page"), 1),
+        limit: parsePositiveInteger(url.searchParams.get("limit"), 20, 100)
+      });
+    }
+  },
+  {
+    method: "GET",
+    pattern: new URLPattern({ pathname: "/api/top-movies" }),
+    handler: async (request: Request) => {
+      const url = new URL(request.url);
+      return repository.getFeedPage({
+        feedKind: "top-movies",
+        lang: normalizeLang(url.searchParams.get("lang")),
+        page: parsePositiveInteger(url.searchParams.get("page"), 1),
+        limit: parsePositiveInteger(url.searchParams.get("limit"), 20, 100)
+      });
+    }
+  },
+  {
+    method: "GET",
     pattern: new URLPattern({ pathname: "/api/media/:publicId" }),
     handler: async (request: Request, match: URLPatternResult) => {
       const lang = normalizeLang(new URL(request.url).searchParams.get("lang"));

@@ -76,6 +76,142 @@ Response shape:
 }
 ```
 
+## Home Feed
+
+### `GET /api/home`
+
+Returns a stored home feed page from the database. This endpoint only returns pages that have already been ingested with `npm run ingest:home`.
+
+Query parameters:
+
+| Name | Type | Default | Description |
+| --- | --- | --- | --- |
+| `lang` | string | `id` | Preferred localization language |
+| `page` | number | `1` | Stored feed page number |
+| `limit` | number | `20` | Max items to return, max `100` |
+
+Example:
+
+```bash
+curl "https://api.buffers.site/api/home?page=1&limit=20&lang=id"
+```
+
+Response shape:
+
+```json
+{
+  "feed": "home",
+  "page": 1,
+  "limit": 20,
+  "refreshedAt": "2026-04-19T10:15:00.000Z",
+  "items": [
+    {
+      "publicId": "378cfb51-9777-4a00-80b8-6d1afae12d96",
+      "type": "movie",
+      "title": "Example Movie",
+      "overview": "Overview...",
+      "originalTitle": "Example Movie",
+      "releaseYear": 2024,
+      "runtimeMinutes": 120,
+      "posterUrl": "https://image.tmdb.org/t/p/w500/...",
+      "backdropUrl": "https://image.tmdb.org/t/p/w500/...",
+      "popularity": 100.2,
+      "voteAverage": 8.4,
+      "voteCount": 2100,
+      "metadataSource": "tmdb",
+      "subtitleSource": "opensubtitles",
+      "subtitleTrackCount": 2,
+      "localization": {
+        "lang": "id",
+        "sourceProvider": "tmdb",
+        "sourceKind": "localized",
+        "confidence": 0.95
+      },
+      "updatedAt": "2026-04-19T10:15:00.000Z",
+      "feedPosition": 1
+    }
+  ]
+}
+```
+
+## Popular Movies Feed
+
+### `GET /api/popular-movies`
+
+Returns a stored page from the popular movies feed. This endpoint only returns pages that have already been ingested with `npm run ingest:popular-movies`.
+
+Query parameters:
+
+| Name | Type | Default | Description |
+| --- | --- | --- | --- |
+| `lang` | string | `id` | Preferred localization language |
+| `page` | number | `1` | Stored feed page number |
+| `limit` | number | `20` | Max items to return, max `100` |
+
+Example:
+
+```bash
+curl "https://api.buffers.site/api/popular-movies?page=1&limit=20&lang=id"
+```
+
+Response shape:
+
+```json
+{
+  "feed": "popular-movies",
+  "page": 1,
+  "limit": 20,
+  "refreshedAt": "2026-04-19T10:15:00.000Z",
+  "items": [
+    {
+      "publicId": "378cfb51-9777-4a00-80b8-6d1afae12d96",
+      "type": "movie",
+      "title": "Example Movie",
+      "feedPosition": 1
+    }
+  ]
+}
+```
+
+## Top Movies Feed
+
+### `GET /api/top-movies`
+
+Returns a stored page from the top movies feed. This endpoint only returns pages that have already been ingested with `npm run ingest:top-movies`.
+
+Query parameters:
+
+| Name | Type | Default | Description |
+| --- | --- | --- | --- |
+| `lang` | string | `id` | Preferred localization language |
+| `page` | number | `1` | Stored feed page number |
+| `limit` | number | `20` | Max items to return, max `100` |
+
+Example:
+
+```bash
+curl "https://api.buffers.site/api/top-movies?page=1&limit=20&lang=id"
+```
+
+Response shape:
+
+```json
+{
+  "feed": "top-movies",
+  "page": 1,
+  "limit": 20,
+  "refreshedAt": "2026-04-19T10:15:00.000Z",
+  "items": [
+    {
+      "publicId": "378cfb51-9777-4a00-80b8-6d1afae12d96",
+      "type": "movie",
+      "title": "Example Movie",
+      "feedPosition": 1
+    }
+  ]
+}
+```
+
 ## Media Detail
 
 ### `GET /api/media/:publicId`

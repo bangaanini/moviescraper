@@ -181,6 +181,24 @@ GET /health
 GET /api/media?type=movie&lang=id&page=1&limit=20&q=batman
 ```
 
+### Home feed page
+
+```txt
+GET /api/home?page=1&limit=20&lang=id
+```
+
+### Popular movies feed page
+
+```txt
+GET /api/popular-movies?page=1&limit=20&lang=id
+```
+
+### Top movies feed page
+
+```txt
+GET /api/top-movies?page=1&limit=20&lang=id
+```
+
 ### Detail media
 
 ```txt

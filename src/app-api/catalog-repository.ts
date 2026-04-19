@@ -2,6 +2,7 @@ import { prisma } from "../lib/prisma.js";
 import { supabase } from "../lib/supabase.js";
 
 type MediaType = "movie" | "tv";
+type FeedKind = "home" | "popular-movies" | "top-movies";
 
 type MediaRow = {
   id: number;
@@ -91,6 +92,14 @@ type SubtitleTrackRow = {
   score: number | null;
   downloads_count: number | null;
   updated_at: string;
+};
+
+type MediaFeedItemRow = {
+  feed_kind: FeedKind;
+  page_number: number;
+  position: number;
+  media_id: number;
+  fetched_at: string;
 };
 
 export class CatalogRepository {
@@ -250,6 +259,49 @@ export class CatalogRepository {
     return toMediaDetail(media, localizations, externalIds, seasons, subtitles, lang);
   }
 
+  async getFeedPage(input: { feedKind: FeedKind; lang: string; page: number; limit: number }) {
+    const { data, error } = await supabase
+      .from("media_feed_items")
+      .select("feed_kind, page_number, position, media_id, fetched_at")
+      .eq("feed_kind", input.feedKind)
+      .eq("page_number", input.page)
+      .order("position", { ascending: true })
+      .limit(input.limit);
+
+    if (error) {
+      throw error;
+    }
+
+    const rows = (data ?? []) as MediaFeedItemRow[];
+    const summaryMap = await this.getMediaSummaryMap(
+      rows.map((row) => row.media_id),
+      input.lang
+    );
+
+    return {
+      feed: input.feedKind,
+      page: input.page,
+      limit: input.limit,
+      refreshedAt: rows.reduce<string | null>(
+        (latest, row) => (latest == null || row.fetched_at > latest ? row.fetched_at : latest),
+        null
+      ),
+      items: rows
+        .map((row) => {
+          const summary = summaryMap.get(row.media_id);
+          if (!summary) {
+            return null;
+          }
+
+          return {
+            ...summary,
+            feedPosition: row.position
+          };
+        })
+        .filter((item): item is NonNullable<typeof item> => item !== null)
+    };
+  }
+
   async getSeasons(publicId: string) {
     const media = await this.getMediaIdentity(publicId);
     if (!media) {
@@ -351,6 +403,84 @@ export class CatalogRepository {
     }
 
     return (data as Pick<MediaRow, "id" | "public_id" | "media_type"> | null) ?? null;
+  }
+
+  private async getMediaSummaryMap(mediaIds: number[], lang: string) {
+    const map = new Map<number, ReturnType<typeof toMediaSummary>>();
+
+    if (mediaIds.length === 0) {
+      return map;
+    }
+
+    const mediaRecords = await prisma.media.findMany({
+      where: {
+        id: {
+          in: mediaIds.map((id) => BigInt(id))
+        },
+        isActive: true
+      },
+      select: {
+        id: true,
+        publicId: true,
+        mediaType: true,
+        canonicalProvider: true,
+        canonicalExternalId: true,
+        originalTitle: true,
+        originalOverview: true,
+        releaseYear: true,
+        originalLanguage: true,
+        status: true,
+        runtimeMinutes: true,
+        posterUrl: true,
+        backdropUrl: true,
+        popularity: true,
+        voteAverage: true,
+        voteCount: true,
+        adult: true,
+        metadataSource: true,
+        subtitleSource: true,
+        ingestionConfidence: true,
+        isActive: true,
+        createdAt: true,
+        updatedAt: true,
+        mediaLocalizations: {
+          where: {
+            lang: {
+              in: uniqueLangs(lang)
+            }
+          },
+          select: {
+            mediaId: true,
+            lang: true,
+            title: true,
+            overview: true,
+            sourceProvider: true,
+            sourceKind: true,
+            isDefault: true,
+            confidence: true
+          }
+        }
+      }
+    });
+
+    const subtitleCounts = await this.getMediaSubtitleCounts(
+      mediaRecords.map((record) => Number(record.id))
+    );
+
+    for (const record of mediaRecords) {
+      const media = mapPrismaMediaRow(record);
+      const localization = pickLocalization(
+        record.mediaLocalizations.map((item) => mapPrismaLocalizationRow(item)),
+        lang
+      );
+
+      map.set(
+        media.id,
+        toMediaSummary(media, localization, subtitleCounts.get(media.id) ?? 0)
+      );
+    }
+
+    return map;
   }
 
   private async getLocalizationMap(mediaIds: number[], lang: string) {

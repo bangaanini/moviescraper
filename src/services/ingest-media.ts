@@ -1,5 +1,5 @@
 import type { OpenSubtitlesSearchItem } from "../providers/opensubtitles.js";
-import type { SflixCatalogItem, SflixMediaInfo, SflixSearchResult } from "../providers/sflix.js";
+import type { SflixCatalogItem, SflixMediaInfo } from "../providers/sflix.js";
 import type { TmdbBundle, TmdbMatch } from "../providers/tmdb.js";
 import { OpenSubtitlesClient } from "../providers/opensubtitles.js";
 import { SflixClient } from "../providers/sflix.js";
@@ -11,6 +11,8 @@ interface IngestMediaInput {
   query: string;
   limit: number;
 }
+
+type FeedKind = "home" | "popular-movies" | "top-movies";
 
 interface InsertedMediaRow {
   id: number;
@@ -34,17 +36,32 @@ export class MediaIngestService {
     );
   }
 
-  async ingestHome(input: { limit?: number } = {}): Promise<void> {
+  async ingestHome(input: { page?: number; limit?: number; offset?: number } = {}): Promise<void> {
+    const limit = input.limit ?? 20;
+    const offset = input.offset ?? ((input.page ?? 1) - 1) * limit;
+
+    if (offset % limit !== 0) {
+      throw new Error("Home ingest offset must be a multiple of limit");
+    }
+
+    const pageNumber = Math.floor(offset / limit) + 1;
     const home = await this.sflix.getHomeCatalog();
-    const candidates = [
+    const candidates = dedupeCatalogItems([
       ...home.featured.filter(isMovieCatalogItem),
       ...home.trendingMovies.filter(isMovieCatalogItem),
       ...home.recentMovieReleases.filter(isMovieCatalogItem),
       ...home.upcoming.filter(isMovieCatalogItem)
-    ];
+    ]);
+    const slice = candidates.slice(offset, offset + limit);
 
     logger.info(
       {
+        source: "home",
+        page: pageNumber,
+        limit,
+        offset,
+        totalMovieCount: candidates.length,
+        ingestCount: slice.length,
         featuredCount: home.featured.filter(isMovieCatalogItem).length,
         trendingMovieCount: home.trendingMovies.filter(isMovieCatalogItem).length,
         recentMovieCount: home.recentMovieReleases.filter(isMovieCatalogItem).length,
@@ -53,64 +70,76 @@ export class MediaIngestService {
       "Fetched SFlix home feed"
     );
 
-    await this.ingestCatalogItems(candidates, {
-      source: "home",
-      ...(input.limit !== undefined ? { limit: input.limit } : {})
+    await this.ingestCatalogFeedItems(slice, {
+      feedKind: "home",
+      pageNumber
     });
   }
 
   async ingestPopularMovies(input: { page?: number; limit?: number } = {}): Promise<void> {
     const page = input.page ?? 1;
+    const limit = input.limit ?? 20;
     const feed = await this.sflix.getPopularMoviesCatalog(page);
+    const slice = feed.items.filter(isMovieCatalogItem).slice(0, limit);
 
     logger.info(
       {
         source: "popular-movies",
         page,
+        limit,
         fetchedCount: feed.items.length,
+        ingestCount: slice.length,
         hasNextPage: feed.hasNextPage,
         lastPage: feed.lastPage
       },
       "Fetched SFlix feed results"
     );
 
-    await this.ingestCatalogItems(feed.items.filter(isMovieCatalogItem), {
-      source: "popular-movies",
-      page,
-      ...(input.limit !== undefined ? { limit: input.limit } : {})
+    await this.ingestCatalogFeedItems(slice, {
+      feedKind: "popular-movies",
+      pageNumber: page
     });
   }
 
   async ingestTopMovies(input: { page?: number; limit?: number } = {}): Promise<void> {
     const page = input.page ?? 1;
+    const limit = input.limit ?? 20;
     const feed = await this.sflix.getTopMoviesCatalog(page);
+    const slice = feed.items.filter(isMovieCatalogItem).slice(0, limit);
 
     logger.info(
       {
         source: "top-movies",
         page,
+        limit,
         fetchedCount: feed.items.length,
+        ingestCount: slice.length,
         hasNextPage: feed.hasNextPage,
         lastPage: feed.lastPage
       },
       "Fetched SFlix feed results"
     );
 
-    await this.ingestCatalogItems(feed.items.filter(isMovieCatalogItem), {
-      source: "top-movies",
-      page,
-      ...(input.limit !== undefined ? { limit: input.limit } : {})
+    await this.ingestCatalogFeedItems(slice, {
+      feedKind: "top-movies",
+      pageNumber: page
     });
   }
 
-  private async ingestCatalogItems(
+  private async ingestCatalogFeedItems(
     items: SflixCatalogItem[],
-    context: { source: string; limit?: number; page?: number }
+    context: { feedKind: FeedKind; pageNumber: number }
   ) {
-    await this.ingestProviderIds(
-      items.map((item) => item.id),
-      context
-    );
+    const orderedItems = items.map((item, index) => ({
+      id: item.id,
+      position: index + 1
+    }));
+    const successes = await this.ingestOrderedProviderIds(orderedItems, {
+      source: context.feedKind,
+      page: context.pageNumber
+    });
+
+    await this.replaceFeedPage(context.feedKind, context.pageNumber, successes);
   }
 
   private async ingestProviderIds(
@@ -137,12 +166,56 @@ export class MediaIngestService {
       "Prepared SFlix items for ingestion"
     );
 
-    for (const id of slice) {
-      await this.ingestProviderId(id);
-    }
+    await this.ingestOrderedProviderIds(
+      slice.map((id, index) => ({ id, position: index + 1 })),
+      context
+    );
   }
 
-  private async ingestProviderId(id: string): Promise<void> {
+  private async ingestOrderedProviderIds(
+    items: Array<{ id: string; position: number }>,
+    context: { source: string; query?: string; page?: number }
+  ) {
+    const successes: Array<{ mediaId: number; sourceExternalId: string; position: number }> = [];
+
+    for (const item of items) {
+      try {
+        const mediaRow = await this.ingestProviderId(item.id);
+        successes.push({
+          mediaId: mediaRow.id,
+          sourceExternalId: item.id,
+          position: item.position
+        });
+      } catch (error) {
+        logger.error(
+          {
+            source: context.source,
+            query: context.query,
+            page: context.page,
+            providerId: item.id,
+            err: error
+          },
+          "Media ingest failed for feed item"
+        );
+      }
+    }
+
+    logger.info(
+      {
+        source: context.source,
+        query: context.query,
+        page: context.page,
+        attemptedCount: items.length,
+        succeededCount: successes.length,
+        failedCount: items.length - successes.length
+      },
+      "Completed media ingestion batch"
+    );
+
+    return successes;
+  }
+
+  private async ingestProviderId(id: string): Promise<InsertedMediaRow> {
     const mediaInfo = await this.sflix.getMediaInfo(id);
     const mediaType = normalizeMediaType(mediaInfo.type);
     const year = extractYear(mediaInfo.releaseDate);
@@ -166,6 +239,48 @@ export class MediaIngestService {
       },
       "Media ingested"
     );
+
+    return mediaRow;
+  }
+
+  private async replaceFeedPage(
+    feedKind: FeedKind,
+    pageNumber: number,
+    items: Array<{ mediaId: number; sourceExternalId: string; position: number }>
+  ) {
+    if (items.length === 0) {
+      logger.warn({ feedKind, pageNumber }, "Skipping feed page replacement because no items were ingested");
+      return;
+    }
+
+    const { error: deleteError } = await supabase
+      .from("media_feed_items")
+      .delete()
+      .eq("feed_kind", feedKind)
+      .eq("page_number", pageNumber);
+
+    if (deleteError) {
+      throw deleteError;
+    }
+
+    const fetchedAt = new Date().toISOString();
+    const rows = items.map((item) => ({
+      feed_kind: feedKind,
+      page_number: pageNumber,
+      position: item.position,
+      media_id: item.mediaId,
+      source_provider: "sflix",
+      source_external_id: item.sourceExternalId,
+      fetched_at: fetchedAt
+    }));
+
+    const { error: insertError } = await supabase.from("media_feed_items").insert(rows);
+
+    if (insertError) {
+      throw insertError;
+    }
+
+    logger.info({ feedKind, pageNumber, count: rows.length }, "Feed page stored");
   }
 
   private async tryResolveTmdb(
@@ -747,6 +862,22 @@ export class MediaIngestService {
 
 function isMovieCatalogItem(item: SflixCatalogItem) {
   return normalizeMediaType(item.type) === "movie";
+}
+
+function dedupeCatalogItems(items: SflixCatalogItem[]) {
+  const seen = new Set<string>();
+  const deduped: SflixCatalogItem[] = [];
+
+  for (const item of items) {
+    if (seen.has(item.id)) {
+      continue;
+    }
+
+    seen.add(item.id);
+    deduped.push(item);
+  }
+
+  return deduped;
 }
 
 function normalizeMediaType(type: string): "movie" | "tv" {

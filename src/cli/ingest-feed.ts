@@ -8,7 +8,7 @@ async function main(): Promise<void> {
 
   if (!isSupportedFeed(feed)) {
     throw new Error(
-      'Usage: npm run ingest:home [-- --limit=20] | npm run ingest:popular-movies [-- --page=1 --limit=20] | npm run ingest:top-movies [-- --page=1 --limit=20]'
+      'Usage: npm run ingest:home [-- --page=1 --limit=20] [-- --offset=0] | npm run ingest:popular-movies [-- --page=1 --limit=20] | npm run ingest:top-movies [-- --page=1 --limit=20]'
     );
   }
 
@@ -17,7 +17,11 @@ async function main(): Promise<void> {
 
   switch (feed) {
     case "home":
-      await service.ingestHome({ ...(options.limit ? { limit: options.limit } : {}) });
+      await service.ingestHome({
+        ...(options.page ? { page: options.page } : {}),
+        ...(options.limit ? { limit: options.limit } : {}),
+        ...(options.offset !== undefined ? { offset: options.offset } : {})
+      });
       break;
     case "popular-movies":
       await service.ingestPopularMovies({
@@ -41,6 +45,7 @@ function isSupportedFeed(value: string | undefined): value is SupportedFeed {
 function parseOptions(args: string[]) {
   let page: number | undefined;
   let limit: number | undefined;
+  let offset: number | undefined;
 
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -71,16 +76,41 @@ function parseOptions(args: string[]) {
       continue;
     }
 
+    if (arg === "--offset") {
+      offset = parseNonNegativeInteger(args[index + 1], "offset");
+      index += 1;
+      continue;
+    }
+
+    if (arg.startsWith("--offset=")) {
+      offset = parseNonNegativeInteger(arg.slice("--offset=".length), "offset");
+      continue;
+    }
+
     throw new Error(`Unknown argument: ${arg}`);
   }
 
-  return { page, limit };
+  if (page !== undefined && offset !== undefined) {
+    throw new Error("Use either --page or --offset for home ingest, not both");
+  }
+
+  return { page, limit, offset };
 }
 
 function parsePositiveInteger(value: string | undefined, name: string) {
   const parsed = Number(value);
 
   if (!value || !Number.isInteger(parsed) || parsed < 1) {
+    throw new Error(`Invalid ${name}: ${value ?? ""}`);
+  }
+
+  return parsed;
+}
+
+function parseNonNegativeInteger(value: string | undefined, name: string) {
+  const parsed = Number(value);
+
+  if (!value || !Number.isInteger(parsed) || parsed < 0) {
     throw new Error(`Invalid ${name}: ${value ?? ""}`);
   }
 
