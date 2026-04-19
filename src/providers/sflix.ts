@@ -36,14 +36,24 @@ const paginatedCatalogResponseSchema = z.object({
 
 const homeCatalogResponseSchema = z.object({
   featured: z.array(catalogItemSchema).default([]),
-  trending: z.object({
-    Movies: z.array(catalogItemSchema).default([]),
-    Tv: z.array(catalogItemSchema).default([])
-  }),
-  recentReleases: z.object({
-    Movies: z.array(catalogItemSchema).default([]),
-    Tv: z.array(catalogItemSchema).default([])
-  }),
+  trending: z
+    .object({
+      Movies: z.array(catalogItemSchema).default([]),
+      Tv: z.array(catalogItemSchema).default([])
+    })
+    .default({
+      Movies: [],
+      Tv: []
+    }),
+  recentReleases: z
+    .object({
+      Movies: z.array(catalogItemSchema).default([]),
+      Tv: z.array(catalogItemSchema).default([])
+    })
+    .default({
+      Movies: [],
+      Tv: []
+    }),
   upcoming: z.array(catalogItemSchema).default([])
 });
 
