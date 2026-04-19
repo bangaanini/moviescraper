@@ -1,19 +1,282 @@
-# SFlix Catalog Ingest
+# SFlix Supabase Catalog
 
-Pipeline ini mengambil hasil pencarian dari SFlix/Consumet, memperkaya metadata dengan TMDb berbahasa Indonesia, lalu mencari subtitle Indonesia dari OpenSubtitles dan menyimpannya ke Supabase.
+Metadata ingestion and read API for movies and TV series.
 
-## Kenapa arsitekturnya dipisah
+This project searches titles from SFlix/Consumet, enriches them with TMDb metadata, looks up Indonesian subtitles from OpenSubtitles, stores the normalized catalog in Supabase, and exposes a clean read API for frontend applications.
 
-- `SFlix` dipakai untuk menemukan item dan provider-specific IDs.
-- `TMDb` dipakai untuk metadata kanonik dan localizations, termasuk `id-ID`.
-- `OpenSubtitles.com` dipakai untuk subtitle Indonesia.
-- URL stream yang sifatnya sementara tidak disimpan sebagai data kanonik. Simpan identifier provider, lalu resolve stream saat dibutuhkan.
+## What This Project Does
 
-## Struktur utama database
+- searches movies and TV shows from the SFlix provider
+- enriches metadata with TMDb localized data, including Indonesian titles and overviews
+- stores canonical media records, seasons, episodes, external IDs, and subtitle track metadata in Supabase
+- exposes a small read-only API for frontend consumption
+- supports public API deployment behind Nginx
+- supports browser-based frontend access with configurable CORS
 
-- `public.media`: entity film/serial kanonik
-- `public.media_external_ids`: ID lintas provider seperti `tmdb`, `imdb`, `sflix`
-- `public.media_localizations`: judul dan overview per bahasa
+## Typical Architecture
+
+```txt
+Consumet/SFlix -> Ingest Worker -> TMDb/OpenSubtitles -> Supabase -> app-api -> Frontend
+```
+
+In production, the services are typically used like this:
+
+1. `consumet` stays internal
+2. `ingestor` runs manually, via cron, or via admin workflow
+3. `app-api` is the only service exposed to frontend clients
+4. frontend reads catalog data from `app-api`
+
+## Main Features
+
+- canonical movie and TV catalog storage
+- Indonesian and English localization fallback
+- seasons and episodes for TV content
+- subtitle track discovery and ranking
+- simple HTTP API for list, detail, seasons, episodes, and subtitles
+- Docker Compose deployment for VPS
+- domain and SSL setup with Nginx
+
+## Repository Structure
+
+```txt
+src/
+  app-api/            Read API served to frontend clients
+  cli/                Manual CLI commands for ingestion
+  providers/          SFlix, TMDb, and OpenSubtitles integrations
+  services/           Ingestion pipeline
+prisma/               Prisma schema and migrations
+supabase/migrations/  SQL schema for Supabase
+ConsumetAPI/          Provider service files used by the stack
+```
+
+## Quick Start
+
+### Prerequisites
+
+- Node.js `>= 24`
+- npm
+- PostgreSQL / Supabase project
+- TMDb API token
+- optional OpenSubtitles API key
+- Docker and Docker Compose plugin for VPS deployment
+
+### 1. Install dependencies
+
+```bash
+npm install
+```
+
+### 2. Create `.env`
+
+```bash
+cp .env.example .env
+```
+
+Minimum variables you should set:
+
+```env
+DATABASE_URL=postgresql://...
+DIRECT_URL=postgresql://...
+SUPABASE_URL=https://your-project-ref.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+
+APP_API_PORT=4000
+APP_API_CORS_ALLOWED_ORIGINS=*
+
+SFLIX_BASE_URL=local://consumet
+
+TMDB_API_TOKEN=your-tmdb-v4-bearer-token
+
+OPENSUBTITLES_API_KEY=your-opensubtitles-api-key
+OPENSUBTITLES_USER_AGENT=sflix-catalog-bot v0.1.0
+```
+
+Notes:
+
+- `APP_API_CORS_ALLOWED_ORIGINS=*` allows browser access from any origin
+- replace `*` with a comma-separated origin list if you want to lock it down later
+- if `OPENSUBTITLES_API_KEY` is empty, subtitle discovery will return no subtitle tracks
+
+### 3. Apply database schema
+
+Run the SQL migrations in [`supabase/migrations`](./supabase/migrations).
+
+If you use Prisma migrations directly, the project also includes [`prisma/migrations`](./prisma/migrations).
+
+### 4. Ingest a title
+
+```bash
+npm run ingest:search -- "breaking bad"
+```
+
+The CLI:
+
+- searches SFlix
+- takes the first `INGEST_DEFAULT_LIMIT` results
+- enriches each result with TMDb when possible
+- stores media, localizations, seasons, episodes, external IDs, and subtitle metadata
+
+### 5. Start the read API
+
+```bash
+npm run api:start
+```
+
+Health check:
+
+```bash
+curl http://127.0.0.1:4000/health
+```
+
+## Usage
+
+### Search and ingest
+
+```bash
+npm run ingest:search -- "the batman"
+```
+
+### Read from the API
+
+List media:
+
+```bash
+curl "http://127.0.0.1:4000/api/media?q=breaking%20bad&lang=id&page=1&limit=20"
+```
+
+Get media detail:
+
+```bash
+curl "http://127.0.0.1:4000/api/media/<publicId>?lang=id"
+```
+
+Get seasons:
+
+```bash
+curl "http://127.0.0.1:4000/api/media/<publicId>/seasons"
+```
+
+Get episodes:
+
+```bash
+curl "http://127.0.0.1:4000/api/media/<publicId>/episodes?seasonNumber=1"
+```
+
+Get subtitles:
+
+```bash
+curl "http://127.0.0.1:4000/api/media/<publicId>/subtitles?lang=id"
+curl "http://127.0.0.1:4000/api/media/<publicId>/episodes/1/1/subtitles?lang=id"
+```
+
+Full endpoint reference: [API_REFERENCE.md](./API_REFERENCE.md)
+
+## Docker Compose Deployment
+
+The included [`docker-compose.yml`](./docker-compose.yml) runs:
+
+- `consumet` on `127.0.0.1:3010`
+- `app-api` on `127.0.0.1:4010`
+- `ingestor` as a manual worker profile
+
+Start the public read API stack:
+
+```bash
+docker compose up -d consumet app-api
+```
+
+Run manual ingestion:
+
+```bash
+docker compose --profile manual run --rm ingestor npm run ingest:search -- "breaking bad"
+```
+
+Verify:
+
+```bash
+curl http://127.0.0.1:4010/health
+```
+
+Detailed deployment docs:
+
+- [DEPLOYMENT.md](./DEPLOYMENT.md)
+- [NGINX_DOMAIN_SETUP.md](./NGINX_DOMAIN_SETUP.md)
+
+## Frontend Integration
+
+This project is intended to be consumed from a separate frontend.
+
+Example:
+
+```ts
+const response = await fetch(
+  "https://api.buffers.site/api/media?q=breaking%20bad&lang=id&page=1&limit=20"
+);
+
+const data = await response.json();
+console.log(data.items);
+```
+
+Because `app-api` now supports CORS, browser-based frontends on a different origin can call it directly when `APP_API_CORS_ALLOWED_ORIGINS` is configured appropriately.
+
+Recommended production shape:
+
+- expose only `app-api`
+- keep `consumet` private
+- run ingest separately from frontend traffic
+- place `app-api` behind Nginx, SSL, and rate limiting
+
+## Environment Variables
+
+### Required
+
+| Variable | Description |
+| --- | --- |
+| `DATABASE_URL` | Postgres connection string |
+| `SUPABASE_URL` | Supabase project URL |
+| `SUPABASE_SERVICE_ROLE_KEY` | Service role key used by the backend |
+| `TMDB_API_TOKEN` | TMDb v4 bearer token |
+
+### Common
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `DIRECT_URL` | unset | Direct Postgres connection, preferred for Prisma adapter |
+| `APP_API_PORT` | `4000` | Port used by the read API |
+| `APP_API_CORS_ALLOWED_ORIGINS` | `*` | Comma-separated allowed browser origins or `*` |
+| `SFLIX_BASE_URL` | `local://consumet` | SFlix provider source |
+| `TMDB_DEFAULT_LANGUAGE` | `id-ID` | Preferred TMDb localization |
+| `TMDB_FALLBACK_LANGUAGE` | `en-US` | Fallback TMDb language |
+| `TMDB_IMAGE_BASE_URL` | `https://image.tmdb.org/t/p/w500` | TMDb image base URL |
+| `OPENSUBTITLES_API_BASE_URL` | `https://api.opensubtitles.com/api/v1` | OpenSubtitles API base |
+| `OPENSUBTITLES_API_KEY` | unset | Subtitle discovery key |
+| `OPENSUBTITLES_USER_AGENT` | `sflix-catalog-bot v0.1.0` | OpenSubtitles user agent |
+| `OPENSUBTITLES_TARGET_LANGUAGE` | `id` | Subtitle target language |
+| `OPENSUBTITLES_DOWNLOADS_ENABLED` | `false` | Reserved for later subtitle download workflows |
+| `INGEST_DEFAULT_LIMIT` | `3` | Max search results processed per query |
+
+## Available Scripts
+
+```bash
+npm run build
+npm run typecheck
+npm run api:start
+npm run ingest:search -- "movie title"
+npm run ingest:subtitles
+```
+
+Notes:
+
+- `npm run ingest:subtitles` is currently a placeholder and not implemented as a separate worker
+- the main supported ingestion path today is `npm run ingest:search -- "title"`
+
+## Data Model Overview
+
+Main tables:
+
+- `public.media`
+- `public.media_external_ids`
+- `public.media_localizations`
 - `public.seasons`
 - `public.episodes`
 - `public.episode_external_ids`
@@ -21,37 +284,33 @@ Pipeline ini mengambil hasil pencarian dari SFlix/Consumet, memperkaya metadata 
 - `internal.ingestion_jobs`
 - `internal.provider_payloads`
 
-## Setup
+The Prisma schema is available at [`prisma/schema.prisma`](./prisma/schema.prisma).
 
-1. Copy `.env.example` menjadi `.env`
-2. Isi kredensial `Supabase`, `TMDb`, dan `OpenSubtitles`
-3. Install dependencies:
+## Operational Notes
 
-```bash
-npm install
-```
+- this project stores normalized metadata and subtitle track metadata, not streaming URLs as canonical data
+- `consumet` should stay internal whenever possible
+- the read API is currently unauthenticated; put it behind domain-level protection, rate limiting, or upstream auth if needed
+- subtitle availability depends on OpenSubtitles matches and configured credentials
 
-4. Jalankan migration SQL di proyek Supabase Anda
-5. Untuk test lokal cepat, gunakan mode direct provider dengan:
+## Limitations
 
-```txt
-SFLIX_BASE_URL=local://consumet
-```
+- subtitle backfill worker is not implemented separately yet
+- ingestion currently works best as a manual or scheduled admin workflow
+- public API auth, quota control, and rate limiting are expected to be handled at the reverse proxy or infrastructure layer
 
-Mode ini memakai provider Consumet langsung dari folder `ConsumetAPI`, jadi tidak perlu menjalankan service HTTP Consumet dulu.
+## Recommended Public Deployment
 
-6. Jalankan ingest:
+For a public API setup like `https://api.buffers.site`:
 
-```bash
-npm run ingest:search -- "breaking bad"
-```
+1. run `app-api` on `127.0.0.1:4010`
+2. create a dedicated Nginx site for `api.buffers.site`
+3. proxy public traffic to `127.0.0.1:4010`
+4. enable SSL with Certbot
+5. keep `consumet` private on `127.0.0.1:3010`
 
-7. Jika memakai stack Docker penuh, `docker-compose.yml` akan override `SFLIX_BASE_URL` menjadi `http://consumet:3000`.
+Use this guide: [NGINX_DOMAIN_SETUP.md](./NGINX_DOMAIN_SETUP.md)
 
-## Catatan implementasi
+## License and Provider Responsibility
 
-- `TMDb` dijadikan sumber canonical key jika match ditemukan.
-- Jika TMDb tidak match, fallback ke identitas `sflix`.
-- Subtitle Indonesia disimpan sebagai track metadata lebih dulu. Download file subtitle bisa diaktifkan belakangan setelah kredensial OpenSubtitles lengkap.
-- Untuk pipeline produksi, gunakan queue/cron dan batch ingest, bukan request sinkron dari frontend.
-# moviescraper
+You are responsible for complying with the terms of service and legal requirements of any upstream provider you use, including SFlix/Consumet, TMDb, OpenSubtitles, Supabase, and your hosting environment.
